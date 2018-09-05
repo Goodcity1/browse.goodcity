@@ -1,35 +1,34 @@
 version: 2
 
 aliases:
-defaults: &defaults
-    docker:
-      - image: circleci/node:8
-    working_directory: ~/crossroads/browse.goodcity
-restore-repo-cache: &restore-repo-cache
-    key: v1-repo-{{ .Environment.CIRCLE_SHA1 }}
-restore-yarn-cache: &restore-yarn-cache
-    key: v1-yarn-packages-{{ checksum "yarn.lock" }}
-save-yarn-cache: &save-yarn-cache
-    key: v1-yarn-packages-{{ checksum "yarn.lock" }}
-    paths:
-      - ~/.cache/yarn
-      - node_modules
-yarn: &yarn
+  - defaults: &defaults
+      docker:
+        - image: circleci/node:8
+      working_directory: ~/browse
+  - &restore-repo-cache
+      key: repo-{{ .Environment.CIRCLE_SHA1 }}
+  - &restore-yarn-cache
+      keys:
+        - yarn-packages-{{ checksum "yarn.lock" }}
+  - &save-yarn-cache
+      key: yarn-packages-{{ checksum "yarn.lock" }}
+      paths:
+        - node_modules
+        - ~/.cache/yarn
+  - &yarn
     |
-      yarn install --non-interactive --cache-folder ~/.cache/yarn
-
-restore-bower-cache: &restore-bower-cache
-    key: v1-bower-components-{{ checksum "bower.json" }}
-save-bower-cache: &save-bower-cache
-    key: v1-bower-components-{{ checksum "bower.json" }}
-    paths:
-      - bower_components
-
-restore-bundle-cache: &restore-bundle-cache
-    key: v1-bundle-{{ checksum "Gemfile.lock" }}
-save-bundle-cache: &save-bundle-cache
-    key: v1-bundle-{{ checksum "Gemfile.lock" }}
-    paths:
+      yarn install --non-interactive --cache-folder ~/.cache/yarn --frozen-lockfile
+  - &restore-bower-cache
+      key: bower-components-{{ checksum "bower.json" }}
+  - &save-bower-cache
+      key: bower-components-{{ checksum "bower.json" }}
+      paths:
+        - bower_components
+  - &restore-bundler-cache
+      key: bundle-{{ checksum "Gemfile.lock" }}
+  - &save-bundler-cache
+      key: bundle-{{ checksum "Gemfile.lock" }}
+      paths:
         - vendor/bundle
 
 jobs:
@@ -39,9 +38,9 @@ jobs:
     steps:
       - checkout
       - save_cache:
-          key: v1-repo-{{ .Environment.CIRCLE_SHA1 }}
+          key: repo-{{ .Environment.CIRCLE_SHA1 }}
           paths:
-            - ~/crossroads/browse.goodcity
+            - ~/browse
 
   package_dependencies:
     <<: *defaults
@@ -88,7 +87,7 @@ jobs:
       - restore-cache: *restore-yarn-cache
       - restore-cache: *restore-bower-cache
       - attach_workspace:
-          at: ~/crossroads/browse.goodcity
+          at: ~/browse
       - run:
           name: Upload coverage results to Code Climate
           command: |
@@ -127,11 +126,11 @@ jobs:
       - image: circleci/ruby:2.5.1-node
     steps:
       - restore-cache: *restore-repo-cache
-      - restore-cache: *restore-bundle-cache
+      - restore-cache: *restore-bundler-cache
       - run: bundle check --path=vendor/bundle || bundle install --deployment --jobs=4 --retry=3
-      - save-cache: *save-bundle-cache
+      - save-cache: *save-bundler-cache
       - attach_workspace:
-          at: ~/crossroads/browse.goodcity
+          at: ~/browse
       - run: mv dist-www/ dist
       - run:
           name: Setup Environment
@@ -166,77 +165,64 @@ jobs:
               echo staging=$staging
               echo APP_VERSION=$APP_VERSION
       - run: yarn run ember build --environment=production
-      - run: mv dist/ cordova/www
+      - run: mv dist/ cordova-dist
       - persist_to_workspace:
           root: .
           paths:
-            - cordova/www
+            - cordova-dist/
 
   android_build:
     <<: *defaults
-
     docker:
       - image: circleci/android:api-26-node8-alpha
     environment:
       JVM_OPTS: -Xmx3200m
       KEYSTORE: goodcity.keystore
+      GOODCITY_KEYSTORE_ALIAS: "GoodCity Admin"
     steps:
       - restore-cache: *restore-repo-cache
       - restore-cache: *restore-yarn-cache
       - attach_workspace:
-          at: ~/crossroads/browse.goodcity
+          at: ~/browse
+      - run: mv cordova-dist/ cordova/www
       - run:
           name: Setup Environment variables
           command: |
-            echo 'export APP_NAME=$(if [ "$CIRCLE_BRANCH" == "live" ]; then echo Browse GoodCity; else echo S. Browse GoodCity; fi)' >> $BASH_ENV
-            echo 'export APP_ID=$(if [ "$CIRCLE_BRANCH" == "live" ]; then echo hk.goodcity.browse; else echo hk.goodcity.browsestaging; fi)' >> $BASH_ENV
-            echo 'export APP_VERSION=$(jq -r ".version" package.json)' >> $BASH_ENV
-            echo 'export ENVIRONMENT=$(if [ "$CIRCLE_BRANCH" == "live" ]; then echo production; else echo staging; fi)' >> $BASH_ENV
-            echo 'export PATH=$PATH:`yarn bin`' >> $BASH_ENV
-            echo 'export BUILD=$(if [ "$CIRCLE_BRANCH" == "live" ]; then echo --release; else echo --debug; fi)' >> $BASH_ENV
-            echo 'export PATH=$PATH:$ANDROID_HOME/tools/gradle/bin' >> $BASH_ENV
-      - run: azure-filestore download -f ${KEYSTORE} && mv ${KEYSTORE} cordova/
-      - run: azure-filestore download -d google-play -f ${GOOGLE_PLAY_KEY_FILE} && mv ${GOOGLE_PLAY_KEY_FILE} fastlane/
-      - run:
-          name: Print Environment variables
-          command: |
-            echo APP_NAME=$APP_NAME
-            echo APP_ID=$APP_ID
-            echo APP_VERSION=$APP_VERSION
-            echo ENVIRONMENT=$ENVIRONMENT
-            echo PATH=$PATH
-            echo BUILD=$BUILD
-      - run: mv ../dist/ cordova/www
+              echo 'export APP_NAME=$(if [ "$CIRCLE_BRANCH" == "live" ]; then echo Browse GoodCity; else echo S. Browse GoodCity; fi)' >> $BASH_ENV
+              echo 'export APP_ID=$(if [ "$CIRCLE_BRANCH" == "live" ]; then echo hk.goodcity.browse; else echo hk.goodcity.browsestaging; fi)' >> $BASH_ENV
+              echo 'export APP_VERSION=$(jq -r ".version" package.json)' >> $BASH_ENV
+              echo 'export ENVIRONMENT=$(if [ "$CIRCLE_BRANCH" == "live" ]; then echo production; else echo staging; fi)' >> $BASH_ENV
+              echo 'export PATH=$PATH:`yarn bin`' >> $BASH_ENV
+              echo 'export BUILD=$(if [ "$CIRCLE_BRANCH" == "live" ]; then echo --release; else echo --debug; fi)' >> $BASH_ENV
+              echo 'export PATH=$PATH:$ANDROID_HOME/tools/gradle/bin' >> $BASH_ENV
+      - run: azure-filestore download -f "${KEYSTORE}" && mv "${KEYSTORE}" cordova/
+      - run: azure-filestore download -d google-play -f "${GOOGLE_PLAY_KEY_FILE}" && mv "${GOOGLE_PLAY_KEY_FILE}" fastlane/
       - run:
           name: Install Gradle 3.3
           command: |
-            wget -O /tmp/gradle.zip https://downloads.gradle.org/distributions/gradle-3.3-bin.zip
-            unzip -d $ANDROID_HOME/tools /tmp/gradle.zip
-            mv $ANDROID_HOME/tools/gradle-3.3 $ANDROID_HOME/tools/gradle
+              wget -O /tmp/gradle.zip https://downloads.gradle.org/distributions/gradle-3.3-bin.zip
+              unzip -d $ANDROID_HOME/tools /tmp/gradle.zip
+              mv $ANDROID_HOME/tools/gradle-3.3 $ANDROID_HOME/tools/gradle
       - run:
           name: Apply App settings
           command: cordova-update-config --appname ${APP_NAME} --appid ${APP_ID} --appversion ${APP_VERSION}
           working_directory: cordova
-
       - run:
           name: Cordova Prepare
           command: cordova prepare android
           working_directory: cordova
-
       - run:
           name: Cordova Compile
           command: |
-            echo KEYSTORE=$KEYSTORE
-            echo GOODCITY_KEYSTORE_ALIAS=$GOODCITY_KEYSTORE_ALIAS
-            cordova compile android "${BUILD}" --device -- --keystore="${KEYSTORE}" --storePassword="${GOODCITY_KEYSTORE_PASSWORD}" --alias="${GOODCITY_KEYSTORE_ALIAS}" --password="${GOODCITY_KEYSTORE_PASSWORD}"
+            cordova compile android "${BUILD}" --device -- --keystore="${KEYSTORE}" --storePassword="${GOODCITY_KEYSTORE_PASSWORD}" \
+              --alias="${GOODCITY_KEYSTORE_ALIAS}" --password="${GOODCITY_KEYSTORE_PASSWORD}"
           working_directory: cordova
       - store_artifacts:
           path: /home/circleci/code/cordova/platforms/android/build/outputs/apk/
 
-
 workflows:
     version: 2
-    build_and_bundle:
+    build-test-and-deploy:
       jobs:
         - checkout_code
         - package_dependencies:
